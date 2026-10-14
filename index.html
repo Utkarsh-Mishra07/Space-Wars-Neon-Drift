@@ -20,7 +20,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:16px;ma
 .value{font-size:19px;font-weight:bold;letter-spacing:2px}
 #health{color:var(--mint)}#sector{color:#ffcc82}
 .stage{position:relative;overflow:hidden;border:1px solid var(--line);background:#080e19;aspect-ratio:16/10;max-height:68vh;min-height:260px}
-canvas{display:block;width:100%;height:100%;image-rendering:pixelated;touch-action:none;outline:none}
+canvas{display:block;object-fit:contain;width:100%;height:100%;image-rendering:pixelated;touch-action:none;outline:none}
 .scanlines{position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(transparent 0px,transparent 3px,#00000015 4px);opacity:.55}
 .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:22px;background:#070e1abc;backdrop-filter:blur(3px)}
 .overlay.hidden{display:none}
@@ -41,7 +41,9 @@ h1 em{font-style:normal;color:var(--mint)}
 footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 2px;font-size:10px;line-height:1.8;color:var(--muted)}
 kbd{display:inline-block;padding:2px 5px;border:1px solid #354253;border-radius:3px;color:#cddbe6;font:inherit}
 .live{color:var(--mint)}.mobile{display:flex;gap:7px}.mobile button{background:#151e29;border:1px solid #3b4f60;padding:9px 13px;border-radius:5px;font-size:10px}
-#toast{position:absolute;top:22px;left:0;right:0;text-align:center;pointer-events:none;font-size:12px;letter-spacing:3px;color:#c8ffe3;text-shadow:0 2px 6px #000;opacity:0;transition:opacity .25s}
+#bossHud{position:absolute;top:12px;left:50%;transform:translateX(-50%);width:min(360px,85%);text-align:center;font-size:10px;color:#eef5f6;pointer-events:none;text-shadow:0 1px 3px #000}
+#bossTrack{height:8px;background:#101b27;margin-bottom:6px}#bossFill{height:100%;background:var(--mint)}
+#toast{position:absolute;bottom:45px;left:0;right:0;text-align:center;pointer-events:none;font-size:12px;letter-spacing:3px;color:#c8ffe3;text-shadow:0 2px 6px #000;opacity:0;transition:opacity .25s}
 @media(max-width:640px){body{padding:10px}.brand{font-size:16px}.eyebrow{font-size:8px}.tool{font-size:9px;padding:8px}.hud{padding:12px;grid-template-columns:1.1fr 1fr 1fr}.bestBox{display:none}.value{font-size:15px}.stage{aspect-ratio:4/5;max-height:none}.cards{gap:6px}.card{padding:12px 8px}.card b{font-size:11px}.desc{font-size:11px;margin-bottom:15px}h1{margin:15px 0}.hint{margin-top:15px}footer{align-items:flex-start}.desktopHint{max-width:210px}}
 </style>
 </head>
@@ -59,7 +61,7 @@ kbd{display:inline-block;padding:2px 5px;border:1px solid #354253;border-radius:
 </section>
 <div class="stage">
 <canvas id="game" width="960" height="600" tabindex="0" aria-label="Neon Drift arcade shooter. Move with WASD or arrows, Space to dash, X for nova, P to pause."></canvas>
-<div class="scanlines"></div><div id="toast"></div>
+<div class="scanlines"></div><div id="toast"></div><div id="bossHud" hidden><div id="bossTrack"><div id="bossFill"></div></div><span id="bossLabel"></span></div>
 <div class="overlay" id="overlay"><div class="panel" id="panel"></div></div>
 </div>
 <footer>
@@ -71,7 +73,60 @@ kbd{display:inline-block;padding:2px 5px;border:1px solid #354253;border-radius:
 (()=>{
 'use strict';
 const $=id=>document.getElementById(id),canvas=$('game'),ctx=canvas.getContext('2d');
-const W=960,H=600,TAU=Math.PI*2;
+const W=960,H=matchMedia('(max-width:640px)').matches?1200:600,TAU=Math.PI*2;
+canvas.height=H;
+// Imperial survival balance: finite sector budgets and bounded active entities.
+const BALANCE={
+ boxes:{xwing:[34,40],tie:[34,30],carrier:[112,140],deathstar:[190,190]},
+ enemyCap:20,carrierCap:3,bulletCap:180,shotCap:160,particleCap:600,
+ supportCount:l=>Math.min(5,Math.max(0,l-1)),
+ carriers:l=>l%5===0?3+Math.min(2,Math.floor(l/20)):Math.min(5,1+Math.floor(l/3)),
+ wave:l=>Math.min(80,8+l*2), launches:l=>Math.min(12,4+Math.floor(l/3)),
+ fighterHP:l=>1+Math.min(7,Math.floor(l/8)),carrierHP:l=>12+Math.min(108,l*2),
+ bossHP:l=>80+l*12, speed:l=>Math.min(95,34+l*1.5),
+ deployInterval:4,launchInterval:1.5,waveInterval:1.2,allyHP:3,allyDamage:.45,allyRate:.7,
+ allySpeed:85,allyTracking:.3,allyBulletSpeed:440,carrierEntrySpeed:40,bossEntrySpeed:55,
+ carrierHold:130,bossCarrierHold:235,bossHold:145,
+ enemyBulletSpeed:l=>Math.min(190,100+l*2),bossBulletSpeed:l=>Math.min(210,135+l*2),
+ bossFireInterval:l=>Math.max(.85,1.6-l*.01)
+};
+const assets={};
+async function loadSprite(name,url,rotation=0){
+ const a=assets[name]={rotation,ready:false};
+ try{
+ const im=new Image();im.src=url;await im.decode();a.sourceWidth=im.naturalWidth;a.sourceHeight=im.naturalHeight;
+ const c=document.createElement('canvas');c.width=im.naturalWidth;c.height=im.naturalHeight;
+ const g=c.getContext('2d',{willReadFrequently:true});g.drawImage(im,0,0);
+ const pixels=g.getImageData(0,0,c.width,c.height),d=pixels.data;
+ // Some supplied art contains a baked white/checker backdrop. Remove only
+ // edge-connected neutral backdrop pixels in memory; source files stay intact.
+ const seen=new Uint8Array(c.width*c.height),queue=[];
+ const background=i=>{const j=i*4;return d[j+3]<16||((name==='tie'||name==='deathstar')&&Math.min(d[j],d[j+1],d[j+2])>(name==='deathstar'?190:210)&&Math.max(d[j],d[j+1],d[j+2])-Math.min(d[j],d[j+1],d[j+2])<12)};
+ function visit(i){if(!seen[i]&&background(i)){seen[i]=1;queue.push(i)}}
+ for(let x=0;x<c.width;x++){visit(x);visit((c.height-1)*c.width+x)}
+ for(let y=0;y<c.height;y++){visit(y*c.width);visit(y*c.width+c.width-1)}
+ for(let q=0;q<queue.length;q++){const i=queue[q],x=i%c.width;d[i*4+3]=0;if(x)visit(i-1);if(x<c.width-1)visit(i+1);if(i>=c.width)visit(i-c.width);if(i<c.width*(c.height-1))visit(i+c.width)}
+ let left=c.width,top=c.height,right=-1,bottom=-1;
+ for(let y=0;y<c.height;y++)for(let x=0;x<c.width;x++)if(d[(y*c.width+x)*4+3]>16){left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y)}
+ if(right<left)throw Error('Empty sprite');g.putImageData(pixels,0,0);
+ Object.assign(a,{image:c,left,top,width:right-left+1,height:bottom-top+1,ready:true});
+ }catch(error){a.error=String(error);console.warn('Sprite fallback:',name,error)}
+}
+const assetsReady=Promise.all([loadSprite('xwing','png/image.png'),loadSprite('tie','png/image copy.png'),loadSprite('deathstar','png/image copy 2.png'),loadSprite('carrier','png/imperial.png',Math.PI/2)]);
+function size(kind){
+ const a=assets[kind],box=BALANCE.boxes[kind];if(!a?.ready)return {w:box[0],h:box[1]};
+ const rotated=Math.abs(Math.sin(a.rotation))>.5,iw=rotated?a.height:a.width,ih=rotated?a.width:a.height;
+ const scale=Math.min(box[0]/iw,box[1]/ih);return {w:iw*scale,h:ih*scale};
+}
+function art(kind,x,y){
+ const a=assets[kind],b=size(kind);if(!a?.ready){sprite(kind==='xwing'?ship:bugs[kind==='deathstar'?3:0],x,y,kind==='xwing'?theme.accent:theme.enemy,Math.min(b.w,b.h)/7);return}
+ ctx.save();ctx.translate(x,y);ctx.rotate(a.rotation);const rotated=Math.abs(Math.sin(a.rotation))>.5;
+ const w=rotated?b.h:b.w,h=rotated?b.w:b.h;ctx.drawImage(a.image,a.left,a.top,a.width,a.height,-w/2,-h/2,w,h);ctx.restore();
+}
+function bounds(e){return size(e.kind)}
+function hit(e,x,y,padX=0,padY=0){const b=bounds(e);return Math.abs(e.x-x)<b.w/2+padX&&Math.abs(e.y-y)<b.h/2+padY}
+let allies=[],sector=null;
+
 const themes=[
  {name:'VERDANT VOID',bg:'#07161b',grid:'#12343b',accent:'#a7ffd0',enemy:'#ffad86',type:0},
  {name:'VIOLET CIRCUIT',bg:'#130d25',grid:'#34204b',accent:'#c1a4ff',enemy:'#ffdb7d',type:1},
@@ -89,7 +144,7 @@ const bugs=[
 let state='title',beforePause='play',t=0,last=0,level=1,score=0,best=0,theme=themes[0];
 try{best=Number(localStorage.getItem('neondrift.best'))||0}catch(e){}
 let p,foes=[],shots=[],hostile=[],particles=[],drops=[],keys={},pointer=null;
-let spawned=0,total=0,spawnTimer=0,shootTimer=0,clearTimer=0,shake=0,flash=0,toastTimer=0;
+let total=0,shootTimer=0,clearTimer=0,shake=0,flash=0,toastTimer=0;
 let audio=null,sound=false;
 const stars=Array.from({length:100},()=>({x:Math.random()*W,y:Math.random()*H,z:1+Math.random()*2}));
 const rand=(a,b)=>a+Math.random()*(b-a),clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -110,6 +165,8 @@ function show(html){$('panel').innerHTML=html;$('overlay').classList.remove('hid
 function hide(){$('overlay').classList.add('hidden')}
 function toast(s){$('toast').textContent=s;toastTimer=2.7;$('toast').style.opacity=1}
 function hud(){
+ const boss=foes.find(e=>e.boss&&!e.dead);$('bossHud').hidden=!boss;
+ if(boss){$('bossFill').style.width=(100*Math.max(0,boss.hp/boss.max))+'%';$('bossLabel').textContent=sector.deployed<3?'DEATH STAR · SHIELDED / DEPLOYING '+sector.deployed+'/3 CARRIERS':'DEATH STAR · SHIELD DOWN'}
  $('health').textContent=p?'♥'.repeat(p.hp)+'·'.repeat(p.max-p.hp):'♥ ♥ ♥ ♥ ♥';
  $('score').textContent=pad(score);$('best').textContent=pad(best);
  $('sector').textContent='SECTOR '+pad(level,2);
@@ -118,38 +175,60 @@ function hud(){
  $('nova').textContent='NOVA · '+(p?p.nova:1);
 }
 function title(){
- show('<span class="tag">ARCADE SURVIVAL / ∞ SECTORS</span><h1>SMALL SHIP.<br><em>BIG TROUBLE.</em></h1><p class="desc">Carve a path through an endless pixel cosmos.<br>Shifting worlds. Unpredictable swarms. No final level.</p><button class="primary" id="start">LAUNCH RUN →</button><div class="hint">Your guns fire automatically. You do the dodging.<br>Choose an upgrade each sector. A guardian awaits every fifth.</div>');
+ show('<span class="tag">ARCADE SURVIVAL / ∞ SECTORS</span><h1>SMALL SHIP.<br><em>BIG TROUBLE.</em></h1><p class="desc">Carve a path through an endless pixel cosmos.<br>Shifting worlds. Unpredictable swarms. No final level.</p><button class="primary" id="start">LAUNCH RUN →</button><div class="hint">Your guns fire automatically. You do the dodging.<br>Choose an upgrade each sector. A Death Star awaits every fifth.<br>Start solo. Gain one ally each sector, up to six X-wings including you.<br>Any enemy escaping below ends the run.</div>');
  $('start').onclick=start;
 }
-function start(){
- p={x:W/2,y:H-85,hp:5,max:5,inv:2,dashCD:0,dashTime:0,dx:0,dy:-1,nova:1,power:1,rate:.18,spread:0};
+async function start(){
+ const button=$('start')||$('retry');if(button){button.disabled=true;button.textContent='LOADING SHIPS…'}
+ await assetsReady;
+ p={kind:'xwing',faction:'player',x:W/2,y:H-85,hp:5,max:5,inv:2,dashCD:0,dashTime:0,dx:0,dy:-1,nova:1,power:1,rate:.18,spread:0};
  score=0;level=1;shots=[];hostile=[];particles=[];drops=[];shake=0;flash=0;pointer=null;keys={};
  hide();state='play';begin();canvas.focus();
 }
 function begin(){
  theme=themes[(level-1)%themes.length];document.documentElement.style.setProperty('--mint',theme.accent);
- foes=[];hostile=[];shots=[];drops=[];spawned=0;total=level%5===0?1:Math.min(34,8+level*2);
- spawnTimer=1.4;shootTimer=.15;clearTimer=0;p.inv=Math.max(p.inv,1.6);
- toast(level%5===0?'⚠ SECTOR '+pad(level,2)+' / GUARDIAN APPROACHING':'SECTOR '+pad(level,2)+' / '+theme.name);hud();
+ foes=[];hostile=[];shots=[];drops=[];
+ sector={boss:level%5===0,carriersPending:BALANCE.carriers(level),deployed:0,
+ fightersPending:BALANCE.wave(level),canceled:0,canceledLaunches:0,launched:0,deployTimer:1.4,waveTimer:2,bossDead:false};
+ total=sector.carriersPending+sector.fightersPending;
+ allies=Array.from({length:BALANCE.supportCount(level)},(_,i)=>({kind:'xwing',faction:'ally',x:W*(i+1)/(BALANCE.supportCount(level)+1),y:H-145,hp:BALANCE.allyHP,slot:i,cd:i*.13,inv:0}));
+ shootTimer=.15;clearTimer=0;p.inv=Math.max(p.inv,1.6);
+ if(sector.boss)spawn('deathstar');
+ toast('SECTOR '+pad(level,2)+' / '+(sector.boss?'DEATH STAR · DEPLOYMENT SHIELD':theme.name));hud();
 }
 function burst(x,y,color,n=16){
- for(let i=0;i<n;i++){let a=rand(0,TAU),s=rand(30,180);particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:rand(.2,.65),color,size:rand(2,5)})}
+ for(let i=0;i<n;i++){let a=rand(0,TAU),s=rand(30,180);if(particles.length<BALANCE.particleCap)particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:rand(.2,.65),color,size:rand(2,5)})}
 }
-function spawn(){
- if(level%5===0){
- const hp=60+level*13;
- foes.push({x:W/2,y:-70,base:W/2,r:52,hp,max:hp,boss:true,age:0,cd:1.2,phase:0,type:3,speed:40});return;
+function spawn(kind='tie',origin=null){
+ if(foes.filter(e=>!e.dead).length>=BALANCE.enemyCap)return null;
+ const boss=kind==='deathstar',carrier=kind==='carrier';
+ const hp=boss?BALANCE.bossHP(level):carrier?BALANCE.carrierHP(level):BALANCE.fighterHP(level);
+ const x=origin?origin.x:carrier?[W*.22,W*.78,W*.5][sector.deployed%3]:rand(50,W-50);
+ const e={kind,faction:'enemy',x,y:origin?origin.y:-size(kind).h/2-8,base:x,hp,max:hp,boss,type:carrier?3:0,age:0,cd:2,phase:origin?0:rand(0,TAU),speed:BALANCE.speed(level),launches:carrier?BALANCE.launches(level):0,launchTimer:.8};
+ foes.push(e);return e;
+}
+function hurt(e,amount){
+ if(e.dead)return;
+ if(e.boss&&sector.deployed<3)return;
+ e.hp-=amount;if(e.hp<=0)kill(e);
+}
+function schedule(dt){
+ sector.deployTimer-=dt;sector.waveTimer-=dt;
+ if(sector.carriersPending>0&&sector.deployTimer<=0&&foes.filter(e=>!e.dead&&e.kind==='carrier').length<BALANCE.carrierCap){
+ if(spawn('carrier')){sector.carriersPending--;sector.deployed++;sector.deployTimer=BALANCE.deployInterval}
  }
- let type=Math.floor(rand(0,Math.min(4,1+Math.ceil(level/2))));
- const hp=type===3?3+Math.floor(level/5):1+Math.floor(level/6);
- let x=rand(75,W-75);
- foes.push({x,y:-30,base:x,r:type===3?20:16,hp,max:hp,type,age:0,cd:rand(1.4,3),speed:Math.min(145,40+level*3)+rand(0,18),phase:rand(0,TAU)});
+ if(sector.fightersPending>0&&sector.waveTimer<=0){if(spawn()){sector.fightersPending--;sector.waveTimer=BALANCE.waveInterval}}
 }
+function complete(){return sector.carriersPending===0&&sector.fightersPending===0&&(!sector.boss||(sector.deployed>=3&&sector.bossDead))&&!foes.some(e=>!e.dead)}
 function enemyBullet(e,angle,speed=150){
- hostile.push({x:e.x,y:e.y+10,vx:Math.cos(angle)*speed,vy:Math.sin(angle)*speed,r:4});
+ if(hostile.length>=BALANCE.bulletCap)return;
+ hostile.push({faction:'enemy',x:e.x,y:e.y+10,vx:Math.cos(angle)*speed,vy:Math.sin(angle)*speed,r:4});
 }
 function kill(e){
- if(e.dead)return;e.dead=true;score+=e.boss?1500+level*100:80+e.type*35;
+ if(e.dead)return;e.dead=true;
+ sector.canceledLaunches+=e.launches||0;e.launches=0;
+ if(e.boss){sector.bossDead=true;sector.canceled+=sector.carriersPending+sector.fightersPending;sector.carriersPending=0;sector.fightersPending=0}
+ score+=e.boss?1500+level*100:80+e.type*35;
  burst(e.x,e.y,e.boss?theme.accent:theme.enemy,e.boss?75:20);tone(e.boss?90:160,.12,'sawtooth');
  shake=e.boss?12:3;
  if(Math.random()<.09&&!e.boss)drops.push({x:e.x,y:e.y,r:10});
@@ -159,11 +238,12 @@ function damage(){
  p.hp--;p.inv=1.7;shake=10;flash=.16;tone(65,.2,'sawtooth',.05);burst(p.x,p.y,'#ffffff',18);
  if(p.hp<=0)gameover();hud();
 }
-function gameover(){
+function gameover(reason='Hull integrity lost.'){
+ if(state!=='play')return;
  state='over';burst(p.x,p.y,theme.accent,70);best=Math.max(best,score);
  try{localStorage.setItem('neondrift.best',best)}catch(e){}
- show('<span class="tag">SIGNAL LOST</span><h1>GOOD RUN,<br><em>PILOT.</em></h1><p class="desc">Score '+pad(score)+' &nbsp; / &nbsp; Sector '+pad(level,2)+'<br>Personal best '+pad(best)+'</p><button class="primary" id="retry">ONE MORE RUN →</button><div class="hint">Tip: dash through danger. Nova clears nearby enemies<br>and every hostile bullet on screen.</div>');
- $('retry').onclick=start;
+ show('<span class="tag">SIGNAL LOST</span><h1>GOOD RUN,<br><em>PILOT.</em></h1><p class="desc">'+reason+'<br>Score '+pad(score)+' &nbsp; / &nbsp; Sector '+pad(level,2)+'<br>Personal best '+pad(best)+'</p><button class="primary" id="retry">ONE MORE RUN →</button><div class="hint">Tip: dash through danger. Nova clears nearby enemies<br>and every hostile bullet on screen.</div>');
+ $('retry').onclick=start;hud();
 }
 function upgrade(){
  state='upgrade';p.nova=Math.min(3,p.nova+1);p.dashCD=0;
@@ -187,7 +267,7 @@ function dash(){
 function nova(){
  if(state!=='play'||p.nova<1)return;
  p.nova--;hostile=[];flash=.3;shake=8;
- for(const e of foes){e.hp-=18*p.power;if(e.hp<=0)kill(e)}
+ for(const e of foes)hurt(e,18*p.power);
  burst(p.x,p.y,theme.accent,100);tone(55,.45,'sawtooth',.06);hud();
 }
 function togglePause(){
@@ -204,11 +284,12 @@ document.addEventListener('keydown',e=>{
 document.addEventListener('keyup',e=>keys[e.code]=false);
 window.addEventListener('blur',()=>{keys={};pointer=null;if(state==='play')togglePause()});
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&state==='play')togglePause()});
-function point(e){const r=canvas.getBoundingClientRect();return{x:(e.clientX-r.left)*W/r.width,y:(e.clientY-r.top)*H/r.height}}
+function point(e){const r=canvas.getBoundingClientRect(),scale=Math.min(r.width/W,r.height/H);return{x:(e.clientX-r.left-(r.width-W*scale)/2)/scale,y:(e.clientY-r.top-(r.height-H*scale)/2)/scale}}
 canvas.addEventListener('pointerdown',e=>{if(state==='play'){pointer=point(e);canvas.setPointerCapture(e.pointerId);canvas.focus()}});
 canvas.addEventListener('pointermove',e=>{if(pointer)pointer=point(e)});
 canvas.addEventListener('pointerup',()=>pointer=null);canvas.addEventListener('pointercancel',()=>pointer=null);
 function update(dt){
+ if(state==='pause'||state==='over')return;
  t+=dt;shake=Math.max(0,shake-dt*28);flash=Math.max(0,flash-dt);
  toastTimer-=dt;if(toastTimer<=0)$('toast').style.opacity=0;
  for(const s of stars){s.y+=dt*s.z*18;if(s.y>H){s.y=0;s.x=rand(0,W)}}
@@ -226,47 +307,59 @@ function update(dt){
  shootTimer-=dt;
  if(shootTimer<=0){
  shootTimer=p.rate;
- for(let i=-p.spread;i<=p.spread;i++){let a=-Math.PI/2+i*.13;shots.push({x:p.x,y:p.y-18,vx:Math.cos(a)*540,vy:Math.sin(a)*540,damage:p.power*(i===0?1:.65)})}
+ for(let i=-p.spread;i<=p.spread;i++){let a=-Math.PI/2+i*.13;if(shots.length<BALANCE.shotCap)shots.push({faction:'player',x:p.x,y:p.y-18,vx:Math.cos(a)*540,vy:Math.sin(a)*540,damage:p.power*(i===0?1:.65)})}
  tone(820,.035,'square',.008);
  }
- spawnTimer-=dt;
- if(spawned<total&&spawnTimer<=0){spawn();spawned++;spawnTimer=Math.max(.27,.85-level*.025)}
+ schedule(dt);
+ for(const a of allies){
+ if(a.hp<=0)continue;
+ a.inv=Math.max(0,a.inv-dt);a.cd-=dt;
+ const target=foes.filter(e=>!e.dead&&e.y>0).sort((a,b)=>b.y-a.y)[0];
+ const home=W*(a.slot+1)/(BALANCE.supportCount(level)+1);
+ const dest=clamp(target?home+(target.x-home)*BALANCE.allyTracking:home,35,W-35);
+ a.x+=clamp(dest-a.x,-BALANCE.allySpeed*dt,BALANCE.allySpeed*dt);a.y=H-145+Math.sin(t+a.slot)*14;
+ if(target&&a.cd<=0&&shots.length<BALANCE.shotCap){const angle=Math.atan2(target.y-a.y,target.x-a.x);shots.push({faction:'ally',x:a.x,y:a.y-20,vx:Math.cos(angle)*BALANCE.allyBulletSpeed,vy:Math.sin(angle)*BALANCE.allyBulletSpeed,damage:BALANCE.allyDamage});a.cd=BALANCE.allyRate}
+ }
  for(const e of foes){
  if(e.dead)continue;e.age+=dt;
- if(e.boss){
- e.y=Math.min(105,e.y+55*dt);e.x=W/2+Math.sin(e.age*.65)*290;
- }else{
- e.y+=e.speed*dt;
- if(e.type===0)e.x=e.base+Math.sin(e.age*2+e.phase)*32;
- if(e.type===1)e.x=e.base+Math.sin(e.age*3+e.phase)*105;
- if(e.type===2){e.x+=clamp(p.x-e.x,-70,70)*dt;e.y+=Math.max(0,Math.sin(e.age*3))*65*dt}
- if(e.type===3)e.x=e.base+Math.sin(e.age*1.3+e.phase)*155;
- e.x=clamp(e.x,22,W-22);
+ if(e.boss){if(e.y<BALANCE.bossHold)e.y=Math.min(BALANCE.bossHold,e.y+BALANCE.bossEntrySpeed*dt);e.x=W/2+Math.sin(e.age*.4)*180}
+ else if(e.kind==='carrier'){
+ const hold=sector.boss?BALANCE.bossCarrierHold:BALANCE.carrierHold;if(e.y<hold)e.y=Math.min(hold,e.y+BALANCE.carrierEntrySpeed*dt);
+ e.launchTimer-=dt;
+ if(e.y>80&&e.launches>0&&e.launchTimer<=0){
+ const origin={x:e.x,y:e.y+bounds(e).h/2+size('tie').h/2+4};
+ if(spawn('tie',origin)){e.launches--;sector.launched++;e.launchTimer=BALANCE.launchInterval;burst(origin.x,origin.y,'#ffcc82',6)}
  }
+ }else{e.y+=e.speed*dt;e.x=clamp(e.base+Math.sin(e.age*2+e.phase)*28,20,W-20)}
  e.cd-=dt;
  if(e.cd<=0&&e.y>20&&e.y<H-70){
  const angle=Math.atan2(p.y-e.y,p.x-e.x);
- if(e.boss){
- const count=7;for(let j=0;j<count;j++)enemyBullet(e,Math.PI/2+(j-3)*.24+Math.sin(e.age)*.2,Math.min(230,135+level*3));
- enemyBullet(e,angle,180);e.cd=Math.max(.5,1.15-level*.012);
- }else{
- if(level>=2||e.type===3)enemyBullet(e,angle,Math.min(245,110+level*5));
- e.cd=rand(1.8,3.2);
+ if(e.boss){for(let j=0;j<7;j++)enemyBullet(e,Math.PI/2+(j-3)*.24+Math.sin(e.age)*.2,BALANCE.bossBulletSpeed(level));enemyBullet(e,angle,180);e.cd=BALANCE.bossFireInterval(level)}
+ else{if(level>=2)enemyBullet(e,angle,BALANCE.enemyBulletSpeed(level));e.cd=rand(2.5,4)}
  }
- }
- if(Math.hypot(e.x-p.x,e.y-p.y)<e.r+10){damage();if(!e.boss)e.dead=true}
- if(e.y>H+50)e.dead=true;
  }
  for(const b of shots){
  b.x+=b.vx*dt;b.y+=b.vy*dt;
- for(const e of foes)if(!e.dead&&Math.abs(b.x-e.x)<e.r+3&&Math.abs(b.y-e.y)<e.r+8){e.hp-=b.damage;b.dead=true;burst(b.x,b.y,theme.accent,3);if(e.hp<=0)kill(e);break}
+ for(const e of foes)if(!e.dead&&hit(e,b.x,b.y,2,8)){hurt(e,b.damage);b.dead=true;burst(b.x,b.y,theme.accent,3);break}
  }
- for(const b of hostile){b.x+=b.vx*dt;b.y+=b.vy*dt;if(Math.hypot(b.x-p.x,b.y-p.y)<13){b.dead=true;damage()}}
+ // Projectiles resolve before escapes, including lethal hits on the bottom edge.
+ for(const e of foes)if(!e.dead&&e.faction==='enemy'&&e.y-bounds(e).h/2>H){gameover('An enemy breached your defenses.');return}
+ for(const e of foes){
+ if(e.dead)continue;
+ if(hit(e,p.x,p.y,10,12)){damage();if(state!=='play')return}
+ for(const a of allies)if(a.hp>0&&a.inv<=0&&hit(e,a.x,a.y,12,14)){a.hp--;a.inv=1;burst(a.x,a.y,theme.accent,10)}
+ }
+ for(const b of hostile){
+ b.x+=b.vx*dt;b.y+=b.vy*dt;
+ if(hit(p,b.x,b.y)){b.dead=true;damage();if(state!=='play')return}
+ if(!b.dead)for(const a of allies)if(a.hp>0&&hit(a,b.x,b.y)){b.dead=true;if(a.inv<=0){a.hp--;a.inv=.7;burst(a.x,a.y,theme.accent,10)}break}
+ }
+ allies=allies.filter(a=>a.hp>0);
  for(const d of drops){d.y+=75*dt;if(Math.hypot(d.x-p.x,d.y-p.y)<26){p.hp=Math.min(p.max,p.hp+1);d.dead=true;tone(620,.1,'triangle');burst(d.x,d.y,'#a7ffd0',10)}}
- shots=shots.filter(b=>!b.dead&&b.y>-30&&b.x>-20&&b.x<W+20);
+ shots=shots.filter(b=>!b.dead&&b.y>-30&&b.y<H+30&&b.x>-20&&b.x<W+20);
  hostile=hostile.filter(b=>!b.dead&&b.y<H+30&&b.y>-30&&b.x>-30&&b.x<W+30);
  foes=foes.filter(e=>!e.dead);drops=drops.filter(d=>!d.dead&&d.y<H+20);
- if(spawned===total&&foes.length===0&&state==='play'){clearTimer+=dt;if(clearTimer>1.1)upgrade()}
+ if(complete()&&state==='play'){clearTimer+=dt;if(clearTimer>1.1)upgrade()}else clearTimer=0;
  hud();
 }
 function sprite(pattern,x,y,color,scale=4){
@@ -289,22 +382,20 @@ function background(){
 function draw(){
  ctx.save();ctx.translate(shake?rand(-shake,shake):0,shake?rand(-shake,shake):0);background();
  if(state==='title'){
- for(let i=0;i<6;i++)sprite(bugs[i%4],110+i*145,100+Math.sin(t+i)*25,theme.enemy,4);
- sprite(ship,W/2,H-90,theme.accent,5);
+ for(let i=0;i<6;i++)art('tie',110+i*145,100+Math.sin(t+i)*25);
+ art('xwing',W/2,H-90);
  }else{
  for(const b of shots){ctx.fillStyle='#effff7';ctx.fillRect(b.x-2,b.y-8,4,16);ctx.fillStyle=theme.accent;ctx.fillRect(b.x-1,b.y+7,2,9)}
  for(const e of foes){
- sprite(bugs[e.type],e.x,e.y,e.boss?theme.accent:theme.enemy,e.boss?13:e.type===3?5:4);
- if(e.boss){
- ctx.fillStyle='#101b27';ctx.fillRect(W/2-180,22,360,9);ctx.fillStyle=theme.enemy;ctx.fillRect(W/2-180,22,360*Math.max(0,e.hp/e.max),9);
- ctx.fillStyle='#eef2f8';ctx.font='10px monospace';ctx.textAlign='center';ctx.fillText('SECTOR GUARDIAN',W/2,46);
- }else if(e.hp<e.max){ctx.fillStyle=theme.enemy;ctx.fillRect(e.x-15,e.y-e.r-9,30*Math.max(0,e.hp/e.max),3)}
+ art(e.kind,e.x,e.y);
+ if(!e.boss&&e.hp<e.max){ctx.fillStyle=theme.enemy;ctx.fillRect(e.x-15,e.y-bounds(e).h/2-9,30*Math.max(0,e.hp/e.max),3)}
  }
  for(const b of hostile){ctx.fillStyle='#ff637d';ctx.fillRect(b.x-5,b.y-5,10,10);ctx.fillStyle='#ffe4b4';ctx.fillRect(b.x-2,b.y-2,4,4)}
  for(const d of drops){ctx.fillStyle='#133b32';ctx.fillRect(d.x-10,d.y-10,20,20);ctx.fillStyle='#a7ffd0';ctx.fillRect(d.x-2,d.y-7,4,14);ctx.fillRect(d.x-7,d.y-2,14,4)}
+ for(const a of allies){art('xwing',a.x,a.y);ctx.fillStyle=theme.accent;ctx.fillRect(a.x-12,a.y+25,24*a.hp/BALANCE.allyHP,2)}
  if(p&&state!=='over'){
  ctx.fillStyle=t%0.12<.06?'#ffd18c':'#ff7d65';ctx.fillRect(p.x-5,p.y+12,10,10+Math.random()*15);
- if(p.inv<=0||Math.floor(t*16)%2===0)sprite(ship,p.x,p.y,theme.accent,4);
+ if(p.inv<=0||Math.floor(t*16)%2===0)art('xwing',p.x,p.y);
  if(p.inv>0){ctx.strokeStyle=theme.accent+'60';ctx.lineWidth=2;ctx.beginPath();ctx.arc(p.x,p.y,25,0,TAU);ctx.stroke()}
  }
  }
@@ -312,15 +403,23 @@ function draw(){
  if(flash>0){ctx.fillStyle='rgba(210,255,238,'+Math.min(.45,flash*1.5)+')';ctx.fillRect(0,0,W,H)}
  if(state==='play'){
  ctx.fillStyle='#7a98a8';ctx.textAlign='left';ctx.font='10px monospace';ctx.fillText('DRIFT ENGINE // '+theme.name,20,H-18);
- const progress=spawned===total?(total-foes.length)/total:Math.max(0,(spawned-foes.length)/total);
+ const progress=clamp(1-(sector.carriersPending+sector.fightersPending+foes.filter(e=>!e.dead).length)/total,0,1);
  ctx.fillStyle='#263746';ctx.fillRect(W-170,H-22,150,4);ctx.fillStyle=theme.accent;ctx.fillRect(W-170,H-22,150*progress,4);
  }
  ctx.restore();
 }
 function loop(now){
  const dt=Math.min(.033,(now-last)/1000||.016);last=now;
- if(state!=='pause')update(dt);draw();requestAnimationFrame(loop);
+ if(state!=='pause'&&!window.__game?.manual)update(dt);draw();requestAnimationFrame(loop);
 }
+// Explicit opt-in only: deterministic browser checks never affect normal play.
+if(new URLSearchParams(location.search).get('test')==='1')window.__game={
+ get:()=>({state,level,score,best,p,foes,allies,shots,hostile,drops,sector,assets,BALANCE,W,H}),
+ step:update,spawn,kill,hurt,complete,nova,dash,bounds,point,
+ sector:l=>{level=l;state='play';begin()},
+ setScore:n=>score=n,
+ manual:false
+};
 hud();title();requestAnimationFrame(loop);
 })();
 </script>

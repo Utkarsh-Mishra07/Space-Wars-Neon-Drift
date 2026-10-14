@@ -60,6 +60,7 @@ jobs:
         run: |
           mkdir -p dist
           cp index.html dist/index.html
+          cp -R png dist/png
 
       - uses: actions/upload-pages-artifact@v4
         with:
