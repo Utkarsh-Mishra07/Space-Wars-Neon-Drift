@@ -1,0 +1,112 @@
+name: Desktop release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      simulate_failure:
+        description: 'Deliberately fail the release gate (never publishes)'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - name: Match tag to package version
+        if: github.event_name == 'push'
+        run: node -e "if(process.env.GITHUB_REF_NAME !== 'v'+require('./package.json').version) process.exit(1)"
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+      - run: npm run test:smoke
+      - name: Demonstrate a blocked release
+        if: inputs.simulate_failure == true
+        run: |
+          echo 'Intentional failure: packaging and publication must be skipped.' >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-test-reports
+          path: |
+            playwright-report/
+            test-results/
+  package:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x64
+          - os: windows-latest
+            platform: win
+            arch: x64
+          - os: macos-14
+            platform: mac
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run package:desktop -- --${{ matrix.platform }} --${{ matrix.arch }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Launch packaged Linux application
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node scripts/desktop-smoke.cjs
+      - name: Launch packaged application
+        if: runner.os != 'Linux'
+        run: node scripts/desktop-smoke.cjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            release/*.dmg
+            release/*.deb
+            release/*.exe
+          if-no-files-found: error
+  publish:
+    needs: package
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          merge-multiple: true
+          path: release
+      - name: Require all three platform installers
+        run: node -e "const f=require('fs').readdirSync('release');for(const ext of ['.dmg','.deb','.exe'])if(f.filter(x=>x.endsWith(ext)).length!==1)throw Error('Missing or duplicate '+ext)"
+      - run: npm run checksums
+      - name: Upload complete draft then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "Neon Drift $RELEASE_TAG"
+          gh release upload "$RELEASE_TAG" release/*.dmg release/*.deb release/*.exe release/SHA256SUMS.txt
+          gh release edit "$RELEASE_TAG" --draft=false

@@ -41,9 +41,10 @@ for(const level of [4,5,10,100])test(`sector ${level} has finite deployments and
  }
  s=g.get();return {support,shield,boss:!!boss,deployed:s.sector.deployed,launched:s.sector.launched,max,steps,state:s.state,pending:s.sector.carriersPending+s.sector.fightersPending};
  },level);
- expect(r.support).toBe(Math.min(5,level-1));expect(r.max).toBeLessThanOrEqual(20);expect(r.state).toBe('upgrade');expect(r.pending).toBe(0);expect(r.launched).toBeGreaterThan(0);
+ expect(r.support).toBe(Math.min(5,level-1));expect(r.max).toBeLessThanOrEqual(20);expect(r.state).toBe(level>=10?'victory':'upgrade');expect(r.pending).toBe(0);expect(r.launched).toBeGreaterThan(0);
  if(level%5===0){expect(r.boss).toBe(true);expect(r.shield).toBe(true);expect(r.deployed).toBeGreaterThanOrEqual(3)}
- await page.locator('#up0').click();expect(await page.evaluate(()=>__game.get().level)).toBe(level+1);
+ if(level<10){await page.locator('#up0').click();expect(await page.evaluate(()=>__game.get().level)).toBe(level+1)}
+ else{await expect(page.locator('#panel')).toContainText('CAMPAIGN COMPLETE');await expect(page.locator('#up0')).toHaveCount(0);await page.evaluate(()=>__game.step(60));expect(await page.evaluate(()=>__game.get().state)).toBe('victory');await page.locator('#retry').click();expect(await page.evaluate(()=>__game.get().level)).toBe(1)}
 });
 for(const inv of [0,10])test(`breach defeats full hull with invulnerability ${inv}`,async({page})=>{
  await start(page);

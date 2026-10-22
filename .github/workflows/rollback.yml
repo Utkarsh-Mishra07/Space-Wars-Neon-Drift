@@ -1,0 +1,62 @@
+name: Roll back Pages
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Full 40-character known-good commit SHA from main (must include build scripts)'
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Select a known-good commit from main
+        env:
+          TARGET: ${{ inputs.commit }}
+        run: |
+          [[ "$TARGET" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          git merge-base --is-ancestor "$TARGET" origin/main
+          git checkout --detach "$TARGET"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+      - run: npm run test:smoke
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist
+      - uses: actions/deploy-pages@v4
+        id: deployment
+      - run: npm run test:smoke
+        env:
+          SMOKE_URL: ${{ steps.deployment.outputs.page_url }}
+          EXPECTED_COMMIT: ${{ inputs.commit }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rollback-test-reports
+          path: |
+            playwright-report/
+            test-results/

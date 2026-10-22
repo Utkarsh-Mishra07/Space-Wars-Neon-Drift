@@ -1,71 +1,82 @@
 name: Test and deploy game
-
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   test:
     name: Game checks
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v6
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Install browser
-        run: npx playwright install --with-deps chromium
-
-      - name: Test game
-        run: npm test
-
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+      - run: npm run test:smoke
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-test-reports
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: dist/
   deploy:
     name: Publish game
     needs: test
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       pages: write
       id-token: write
-
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-
     concurrency:
       group: pages
       cancel-in-progress: false
-
     steps:
       - uses: actions/checkout@v6
-
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-build
+          path: dist
       - uses: actions/configure-pages@v5
-
-      - name: Package game
-        run: |
-          mkdir -p dist
-          cp index.html dist/index.html
-          cp -R png dist/png
-
       - uses: actions/upload-pages-artifact@v4
         with:
           path: dist
-
-      - name: Deploy
+      - uses: actions/deploy-pages@v4
         id: deployment
-        uses: actions/deploy-pages@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:smoke
+        env:
+          SMOKE_URL: ${{ steps.deployment.outputs.page_url }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deployed-smoke-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
