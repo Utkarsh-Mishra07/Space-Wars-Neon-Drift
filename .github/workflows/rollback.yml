@@ -33,7 +33,7 @@ jobs:
           [[ "$TARGET" =~ ^[0-9a-f]{40}$ ]] || exit 1
           git merge-base --is-ancestor "$TARGET" origin/main
           git checkout --detach "$TARGET"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
