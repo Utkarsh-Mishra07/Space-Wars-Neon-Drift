@@ -175,7 +175,7 @@ function hud(){
  $('nova').textContent='NOVA · '+(p?p.nova:1);
 }
 function title(){
- show('<span class="tag">ARCADE SURVIVAL / ∞ SECTORS</span><h1>SMALL SHIP.<br><em>BIG TROUBLE.</em></h1><p class="desc">Carve a path through an endless pixel cosmos.<br>Shifting worlds. Unpredictable swarms. No final level.</p><button class="primary" id="start">LAUNCH RUN →</button><div class="hint">Your guns fire automatically. You do the dodging.<br>Choose an upgrade each sector. A Death Star awaits every fifth.<br>Start solo. Gain one ally each sector, up to six X-wings including you.<br>Any enemy escaping below ends the run.</div>');
+ show('<span class="tag">CAMPAIGN / 10 SECTORS</span><h1>SMALL SHIP.<br><em>BIG TROUBLE.</em></h1><p class="desc">Fight through ten sectors of a hostile cosmos.<br>Defeat the final boss in Sector 10 to win.</p><button class="primary" id="start">LAUNCH RUN →</button><div class="hint">Your guns fire automatically. You do the dodging.<br>Choose an upgrade each sector. A Death Star awaits every fifth.<br>Start solo. Gain one ally each sector, up to six X-wings including you.<br>Any enemy escaping below ends the run.</div>');
  $('start').onclick=start;
 }
 async function start(){
@@ -245,7 +245,16 @@ function gameover(reason='Hull integrity lost.'){
  show('<span class="tag">SIGNAL LOST</span><h1>GOOD RUN,<br><em>PILOT.</em></h1><p class="desc">'+reason+'<br>Score '+pad(score)+' &nbsp; / &nbsp; Sector '+pad(level,2)+'<br>Personal best '+pad(best)+'</p><button class="primary" id="retry">ONE MORE RUN →</button><div class="hint">Tip: dash through danger. Nova clears nearby enemies<br>and every hostile bullet on screen.</div>');
  $('retry').onclick=start;hud();
 }
+function victory(){
+ state='victory';keys={};pointer=null;
+ best=Math.max(best,score);
+ try{localStorage.setItem('neondrift.best',best)}catch(e){}
+ show('<span class="tag">CAMPAIGN COMPLETE</span><h1>GALAXY<br><em>SECURED.</em></h1><p class="desc">All 10 sectors cleared.<br>Final score '+pad(score)+'<br>Personal best '+pad(best)+'</p><button class="primary" id="retry">PLAY AGAIN →</button>');
+ $('retry').onclick=start;hud();
+}
 function upgrade(){
+ if(level>=10){victory();return}
+
  state='upgrade';p.nova=Math.min(3,p.nova+1);p.dashCD=0;
  const choices=[
  {icon:'↟',name:'HOT BARRELS',desc:'+25% shot damage',apply:()=>p.power*=1.25},
