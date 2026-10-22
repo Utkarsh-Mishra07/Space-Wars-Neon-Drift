@@ -53,7 +53,7 @@ jobs:
         env:
           SMOKE_URL: ${{ steps.deployment.outputs.page_url }}
           EXPECTED_COMMIT: ${{ inputs.commit }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: rollback-test-reports

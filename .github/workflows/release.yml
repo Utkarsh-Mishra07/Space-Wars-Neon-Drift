@@ -36,7 +36,7 @@ jobs:
         run: |
           echo 'Intentional failure: packaging and publication must be skipped.' >> "$GITHUB_STEP_SUMMARY"
           exit 1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: release-test-reports
@@ -75,7 +75,7 @@ jobs:
       - name: Launch packaged application
         if: runner.os != 'Linux'
         run: node scripts/desktop-smoke.cjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: installer-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
