@@ -1,25 +1,63 @@
 {
   "name": "space-wars",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "A ten-sector space arcade campaign for web and desktop",
+  "main": "desktop/main.cjs",
   "scripts": {
-    "test": "playwright test"
+    "test": "playwright test",
+    "dev": "http-server . -a 127.0.0.1 -p 8080 -c-1",
+    "build": "node scripts/build.cjs",
+    "check": "node scripts/check.cjs",
+    "desktop": "electron .",
+    "package:desktop": "npm run build && electron-builder --publish never",
+    "test:smoke": "playwright test --config playwright.smoke.config.js",
+    "checksums": "node scripts/checksums.cjs"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Utkarsh-Mishra07/Space-Wars.git"
+    "url": "git+https://github.com/Utkarsh-Mishra07/Space-Wars-Neon-Drift.git"
   },
   "keywords": [],
-  "author": "",
+  "author": "Space Wars contributors",
   "license": "ISC",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/Utkarsh-Mishra07/Space-Wars/issues"
+    "url": "https://github.com/Utkarsh-Mishra07/Space-Wars-Neon-Drift/issues"
   },
-  "homepage": "https://github.com/Utkarsh-Mishra07/Space-Wars#readme",
+  "homepage": "https://github.com/Utkarsh-Mishra07/Space-Wars-Neon-Drift",
   "devDependencies": {
     "@playwright/test": "^1.64.0",
+    "electron": "^45.0.0",
+    "electron-builder": "^26.15.3",
     "http-server": "^14.1.1"
+  },
+  "build": {
+    "appId": "io.github.spacewars.neondrift",
+    "productName": "Neon Drift",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/**",
+      "dist/**",
+      "package.json"
+    ],
+    "artifactName": "Neon-Drift-${version}-${os}-${arch}.${ext}",
+    "mac": {
+      "target": "dmg",
+      "identity": null
+    },
+    "linux": {
+      "target": "deb",
+      "category": "Game",
+      "maintainer": "Space Wars contributors <noreply@github.com>"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }
