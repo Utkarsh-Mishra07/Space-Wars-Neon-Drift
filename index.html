@@ -81,10 +81,10 @@ const BALANCE={
  enemyCap:20,carrierCap:3,bulletCap:180,shotCap:160,particleCap:600,
  supportCount:l=>Math.min(5,Math.max(0,l-1)),
  carriers:l=>l%5===0?3+Math.min(2,Math.floor(l/20)):Math.min(5,1+Math.floor(l/3)),
- wave:l=>Math.min(80,8+l*2), launches:l=>Math.min(12,4+Math.floor(l/3)),
- fighterHP:l=>1+Math.min(7,Math.floor(l/8)),carrierHP:l=>12+Math.min(108,l*2),
- bossHP:l=>80+l*12, speed:l=>Math.min(95,34+l*1.5),
- deployInterval:4,launchInterval:1.5,waveInterval:1.2,allyHP:3,allyDamage:.45,allyRate:.7,
+ wave:l=>Math.min(80,10+l*2), launches:l=>Math.min(12,5+Math.floor(l/3)),
+fighterHP:l=>2+Math.min(7,Math.floor(l/6)),carrierHP:l=>16+Math.min(108,l*2),
+bossHP:l=>90+l*14, speed:l=>Math.min(105,38+l*1.7),
+deployInterval:3.5,launchInterval:1.3,waveInterval:1,allyHP:3,allyDamage:.45,allyRate:.7,
  allySpeed:85,allyTracking:.3,allyBulletSpeed:440,carrierEntrySpeed:40,bossEntrySpeed:55,
  carrierHold:130,bossCarrierHold:235,bossHold:145,
  enemyBulletSpeed:l=>Math.min(190,100+l*2),bossBulletSpeed:l=>Math.min(210,135+l*2),
@@ -344,7 +344,10 @@ function update(dt){
  if(e.cd<=0&&e.y>20&&e.y<H-70){
  const angle=Math.atan2(p.y-e.y,p.x-e.x);
  if(e.boss){for(let j=0;j<7;j++)enemyBullet(e,Math.PI/2+(j-3)*.24+Math.sin(e.age)*.2,BALANCE.bossBulletSpeed(level));enemyBullet(e,angle,180);e.cd=BALANCE.bossFireInterval(level)}
- else{if(level>=2)enemyBullet(e,angle,BALANCE.enemyBulletSpeed(level));e.cd=rand(2.5,4)}
+ else{
+ enemyBullet(e,angle,BALANCE.enemyBulletSpeed(level));
+ e.cd=rand(2,3);
+}
  }
  }
  for(const b of shots){
@@ -397,8 +400,21 @@ function draw(){
  for(const b of shots){ctx.fillStyle='#effff7';ctx.fillRect(b.x-2,b.y-8,4,16);ctx.fillStyle=theme.accent;ctx.fillRect(b.x-1,b.y+7,2,9)}
  for(const e of foes){
  art(e.kind,e.x,e.y);
- if(!e.boss&&e.hp<e.max){ctx.fillStyle=theme.enemy;ctx.fillRect(e.x-15,e.y-bounds(e).h/2-9,30*Math.max(0,e.hp/e.max),3)}
- }
+
+ const width=e.boss?120:e.kind==='carrier'?70:36;
+ const x=e.x-width/2;
+ const y=e.y-bounds(e).h/2-14;
+ const fraction=clamp(e.hp/e.max,0,1);
+
+ ctx.fillStyle='#091018';
+ ctx.fillRect(x-2,y-2,width+4,9);
+
+ ctx.fillStyle='#384653';
+ ctx.fillRect(x,y,width,5);
+
+ ctx.fillStyle=fraction>0.4?theme.accent:'#ff756e';
+ ctx.fillRect(x,y,width*fraction,5);
+}
  for(const b of hostile){ctx.fillStyle='#ff637d';ctx.fillRect(b.x-5,b.y-5,10,10);ctx.fillStyle='#ffe4b4';ctx.fillRect(b.x-2,b.y-2,4,4)}
  for(const d of drops){ctx.fillStyle='#133b32';ctx.fillRect(d.x-10,d.y-10,20,20);ctx.fillStyle='#a7ffd0';ctx.fillRect(d.x-2,d.y-7,4,14);ctx.fillRect(d.x-7,d.y-2,14,4)}
  for(const a of allies){art('xwing',a.x,a.y);ctx.fillStyle=theme.accent;ctx.fillRect(a.x-12,a.y+25,24*a.hp/BALANCE.allyHP,2)}
