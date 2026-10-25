@@ -1,0 +1,517 @@
+diff --git a/.github/workflows/game.yml b/.github/workflows/game.yml
+index 98511d9..4ad5f0b 100644
+--- a/.github/workflows/game.yml
++++ b/.github/workflows/game.yml
+@@ -19,6 +19,7 @@ jobs:
+           cache: npm
+       - run: npm ci
+       - run: npm run check
++      - run: npm run test:multiplayer
+       - run: npm run build
+       - run: npx playwright install --with-deps chromium
+       - run: npm test
+diff --git a/.gitignore b/.gitignore
+index 56d8061..7df93d3 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -3,4 +3,6 @@ dist/
+ release/
+ test-results/
+ playwright-report/
++server/scores.json
++server/scores.json.tmp
+ .DS_Store
+diff --git a/README.md b/README.md
+index 59488d9..016e140 100644
+--- a/README.md
++++ b/README.md
+@@ -2,6 +2,19 @@
+ 
+ A browser and desktop arcade game with a ten-sector campaign. Clear each sector, select an upgrade, and defeat the Sector 10 boss to win. Replay starts at Sector 1; your best score stays saved on that device.
+ 
++## Two-player multiplayer
++
++The multiplayer server offers two room modes. **Co-op** shares a team score and ends when an enemy escapes or both pilots lose their ships. **Kill race** lasts three minutes; pilots compete on kills in the same arena, respawn after losing all health, and the player with more kills wins. A tie is possible. The server simulates movement, shooting, hits, kills, scores, and match results; clients only send movement and ability inputs. This is a separate arena mode; the solo campaign remains available.
++
++```sh
++npm ci
++npm run multiplayer
++```
++
++Open http://localhost:3000/multiplayer.html in two browser windows or on two devices that can reach the same server. One pilot creates a room and shares its six-character code or invite link; the other joins. The room is capped at two players. The scoreboard is served at `/api/leaderboard` and saved to `server/scores.json` by default. Back up that file or set `SCORES_FILE` to a path on persistent storage when hosting the server. Set `PORT` to choose the listening port. Names are display names, without accounts.
++
++Run `npm run test:multiplayer` for the two-client server tests. The multiplayer page is served by the Node server. GitHub Pages continues to publish the solo campaign; its static hosting cannot run the WebSocket server or persist the scoreboard. Deploy the Node process on a host that supports persistent server processes, WebSockets, and persistent storage, then share that host's URL. The solo page shows a multiplayer link automatically when opened through this server.
++
+ ## Develop
+ 
+ Use Node.js 22 and npm.
+diff --git a/index.html b/index.html
+index b866d09..b64ca9b 100644
+--- a/index.html
++++ b/index.html
+@@ -13,7 +13,7 @@ button{font:inherit;cursor:pointer;color:inherit}
+ header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px}
+ .brand{font-size:20px;font-weight:900;letter-spacing:3px}.brand span{color:var(--mint)}
+ .eyebrow{font-size:10px;letter-spacing:2px;color:var(--muted);margin-top:7px}
+-.tools{display:flex;gap:8px}.tool{background:#151e29;border:1px solid var(--line);padding:10px 13px;font-size:11px;border-radius:5px}
++.tools{display:flex;gap:8px}.tool{background:#151e29;border:1px solid var(--line);padding:10px 13px;font-size:11px;border-radius:5px;text-decoration:none;color:inherit}
+ .tool:hover{border-color:var(--mint);color:var(--mint)}
+ .hud{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;background:#151d28;border:1px solid var(--line);border-bottom:0;border-radius:9px 9px 0 0;padding:17px 22px;gap:10px}
+ .label{font-size:9px;color:var(--muted);letter-spacing:1.8px;margin-bottom:7px}
+@@ -51,7 +51,7 @@ kbd{display:inline-block;padding:2px 5px;border:1px solid #354253;border-radius:
+ <main class="app">
+ <header>
+ <div><div class="brand">NEON<span> / </span>DRIFT</div><div class="eyebrow">ENDLESS SECTORS · ONE LITTLE SHIP</div></div>
+-<div class="tools"><button class="tool" id="sound">SOUND OFF</button><button class="tool" id="pause">Ⅱ PAUSE</button></div>
++<div class="tools"><a class="tool" id="multiplayerLink" href="/multiplayer.html" hidden>MULTIPLAYER</a><button class="tool" id="sound">SOUND OFF</button><button class="tool" id="pause">Ⅱ PAUSE</button></div>
+ </header>
+ <section class="hud">
+ <div><div class="label">HULL INTEGRITY</div><div class="value" id="health">♥ ♥ ♥ ♥ ♥</div></div>
+@@ -73,6 +73,7 @@ kbd{display:inline-block;padding:2px 5px;border:1px solid #354253;border-radius:
+ (()=>{
+ 'use strict';
+ const $=id=>document.getElementById(id),canvas=$('game'),ctx=canvas.getContext('2d');
++fetch('/api/leaderboard').then(r=>{if(r.ok)$('multiplayerLink').hidden=false}).catch(()=>{});
+ const W=960,H=matchMedia('(max-width:640px)').matches?1200:600,TAU=Math.PI*2;
+ canvas.height=H;
+ // Imperial survival balance: finite sector budgets and bounded active entities.
+diff --git a/multiplayer.html b/multiplayer.html
+new file mode 100644
+index 0000000..2f8c472
+--- /dev/null
++++ b/multiplayer.html
+@@ -0,0 +1,48 @@
++<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Neon Drift Multiplayer</title>
++<style>
++:root{font-family:ui-monospace,Consolas,monospace;color:#e9f8f3;background:#08121b}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% 0,#17363c,#08121b 60%);padding:20px}main{max-width:1050px;margin:auto}header,.bar{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}header{padding:8px 0 20px}h1{margin:0;letter-spacing:3px;font-size:24px}h1 span,.accent{color:#9af5ca}a{color:#9af5ca}button,input,select{font:inherit;border:1px solid #3a5a62;background:#152831;color:#eefaf7;padding:11px;border-radius:4px}button{cursor:pointer}button:hover{border-color:#9af5ca}input{width:150px}button.primary{background:#9af5ca;color:#102820;font-weight:bold}button:disabled{opacity:.45;cursor:default}.bar{background:#12222d;padding:14px;margin-bottom:8px;font-size:13px;border:1px solid #334a55}.stage{position:relative}canvas{width:100%;display:block;aspect-ratio:16/10;background:#081b22;image-rendering:pixelated;border:1px solid #476269;touch-action:none}.overlay{position:absolute;inset:0;display:grid;place-items:center;background:#07121ac7;padding:15px}.overlay.hidden{display:none}.panel{width:min(560px,100%);background:#12232eea;padding:26px;border:1px solid #638d88;text-align:center;max-height:100%;overflow:auto}h2{font-size:26px;color:#9af5ca;margin:6px 0 12px}.row{display:flex;justify-content:center;flex-wrap:wrap;gap:8px;margin:12px 0}.note{color:#a8bfc2;font-size:12px;line-height:1.6}.error{color:#ff8d91;min-height:20px}.board{display:grid;gap:7px;text-align:left;max-height:210px;overflow:auto}.entry{border-bottom:1px solid #30484d;padding:5px 0;font-size:11px}.touch{display:flex;gap:8px;justify-content:space-between;margin-top:10px}.touch button{min-width:52px;touch-action:none}.touch .moves{display:flex;gap:5px}footer{color:#a8bfc2;font-size:12px;line-height:1.7;margin-top:12px}@media(max-width:600px){body{padding:8px}h1{font-size:18px}.bar{font-size:11px}.panel{padding:12px}canvas{aspect-ratio:4/5}header{padding-bottom:8px}}
++</style></head><body><main><header><h1>NEON <span>/</span> DRIFT <small class="accent">// TWO PILOTS</small></h1><a href="/index.html">← Solo campaign</a></header>
++<div class="bar"><div id="room">ROOM · —</div><div id="status">AWAITING PILOTS</div><div id="score">TEAM SCORE · 000000</div></div>
++<div class="stage"><canvas id="game" width="960" height="600"></canvas><div class="overlay" id="overlay"><div class="panel" id="panel"></div></div></div>
++<div class="touch"><div class="moves"><button data-key="ArrowLeft">◀</button><button data-key="ArrowUp">▲</button><button data-key="ArrowDown">▼</button><button data-key="ArrowRight">▶</button></div><div><button id="dash">DASH</button> <button id="nova">NOVA</button></div></div>
++<footer>Move: WASD or arrow keys · Dash: Space · Nova: X · Auto-fire is enabled. Share the room code with your second pilot. Both players need to connect to the same server.</footer></main>
++<script>
++(()=>{
++const $=id=>document.getElementById(id),ctx=$('game').getContext('2d'),canvas=$('game');
++let ws=null,id='',code='',mode='',snap=null,keys={},action=null,ended=false,stars=Array.from({length:80},()=>({x:Math.random()*960,y:Math.random()*600,r:Math.random()*2+1}));
++const clean=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
++function panel(html){$('panel').innerHTML=html;$('overlay').classList.remove('hidden')}
++function lobby(message=''){
++ panel(`<h2>CHOOSE YOUR FLIGHT</h2><p class="note">Co-op: survive together and earn a team score.<br>Kill race: compete for kills in the same arena for three minutes.</p><div class="row"><input id="name" maxlength="20" placeholder="Pilot name" value="${clean(sessionStorage.getItem('pilotName')||'')}"><select id="mode"><option value="coop">Co-op</option><option value="versus">Kill race</option></select></div><div class="row"><button class="primary" id="create">CREATE ROOM</button><input id="code" maxlength="6" placeholder="Room code" value="${clean(new URLSearchParams(location.search).get('room')||'')}"><button id="join">JOIN ROOM</button></div><p class="error" id="error">${clean(message)}</p><h3>TOP RESULTS</h3><div id="board" class="board">Loading…</div>`);
++ $('create').onclick=()=>connect('create');$('join').onclick=()=>connect('join');fetch('/api/leaderboard').then(r=>r.json()).then(rows=>{if(!$('board'))return;$('board').innerHTML=rows.length?rows.slice(0,10).map(r=>`<div class="entry">${clean(r.mode==='coop'?'CO-OP':'KILL RACE')} · ${clean(r.players.map(p=>p.name+' '+p.kills).join(' / '))} · ${r.score} pts</div>`).join(''):'No completed games yet.'}).catch(()=>{if($('board'))$('board').textContent='Leaderboard unavailable'});
++ }
++function connect(type){
++ const name=$('name').value.trim(),roomCode=$('code').value.trim().toUpperCase(),selected=$('mode').value;
++ if(!name||type==='join'&&!/^[A-F0-9]{6}$/.test(roomCode)){ $('error').textContent='Enter a name and a six-character room code to join';return }
++ sessionStorage.setItem('pilotName',name);$('error').textContent='Connecting…';
++ ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/socket');
++ ws.onopen=()=>ws.send(JSON.stringify({type,name,mode:selected,code:roomCode}));
++ ws.onmessage=ev=>{let m;try{m=JSON.parse(ev.data)}catch{return}
++  if(m.type==='error'){$('error')?$('error').textContent=m.message:panel('<h2>ERROR</h2><p>'+clean(m.message)+'</p>');ws.close()}
++  if(m.type==='joined'){id=m.id;code=m.code;mode=m.mode;ended=false;$('room').textContent='ROOM · '+code;history.replaceState(null,'','?room='+code);panel('<h2>ROOM '+code+'</h2><p>Waiting for pilot two…</p><p class="note">Share this page URL or the room code.</p><button id="copy">COPY INVITE LINK</button>');$('copy').onclick=()=>navigator.clipboard.writeText(location.href);}
++  if(m.type==='roster'){$('status').textContent=m.players.join(' + ')+(m.ready?' · READY':' · WAITING')}
++  if(m.type==='start'){$('overlay').classList.add('hidden');$('status').textContent=mode==='coop'?'CO-OP · SECTOR 01':'KILL RACE · 03:00'}
++  if(m.type==='state'){snap=m;$('score').textContent='TEAM SCORE · '+String(m.score).padStart(6,'0');$('status').textContent=mode==='coop'?'CO-OP · SECTOR '+String(m.sector).padStart(2,'0'):'KILL RACE · '+Math.ceil(m.remaining)+'s';}
++  if(m.type==='end'){ended=true;panel('<h2>RUN COMPLETE</h2><p>'+clean(m.reason)+'</p><p>TEAM SCORE · '+m.score+'</p>'+(m.winner?'<p>WINNER · '+clean(m.winner)+'</p>':'')+'<button class="primary" id="again">BACK TO LOBBY</button>');$('again').onclick=()=>{ws?.close();snap=null;history.replaceState(null,'',location.pathname);lobby()}}
++ };
++ ws.onclose=()=>{if(!ended&&id){ended=true;panel('<h2>CONNECTION LOST</h2><button id="again">BACK TO LOBBY</button>');$('again').onclick=()=>{id='';lobby()}}else if(!id&&$('error'))$('error').textContent='Could not connect to the multiplayer server'};
++ }
++function sendInput(){if(!ws||ws.readyState!==1||!snap||ended)return;const x=Number(!!(keys.KeyD||keys.ArrowRight))-Number(!!(keys.KeyA||keys.ArrowLeft));const y=Number(!!(keys.KeyS||keys.ArrowDown))-Number(!!(keys.KeyW||keys.ArrowUp));ws.send(JSON.stringify({type:'input',x,y,action}));action=null}
++setInterval(sendInput,50);
++document.addEventListener('keydown',e=>{if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code))e.preventDefault();keys[e.code]=true;if(!e.repeat&&e.code==='Space')action='dash';if(!e.repeat&&e.code==='KeyX')action='nova'});
++document.addEventListener('keyup',e=>keys[e.code]=false);window.addEventListener('blur',()=>keys={});
++for(const b of document.querySelectorAll('[data-key]')){b.addEventListener('pointerdown',e=>{e.preventDefault();keys[b.dataset.key]=true;b.setPointerCapture(e.pointerId)});for(const event of ['pointerup','pointercancel'])b.addEventListener(event,()=>keys[b.dataset.key]=false)}
++$('dash').onclick=()=>action='dash';$('nova').onclick=()=>action='nova';
++function draw(){ctx.fillStyle='#081b22';ctx.fillRect(0,0,960,600);ctx.strokeStyle='#123641';for(let y=0;y<600;y+=60){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(960,y);ctx.stroke()}
++ for(const s of stars){ctx.fillStyle='#426b77';ctx.fillRect(s.x,s.y,s.r,s.r);s.y+=s.r*.3;if(s.y>600)s.y=0}
++ if(snap){for(const e of snap.enemies){ctx.fillStyle='#ff9783';ctx.beginPath();ctx.moveTo(e.x,e.y+15);ctx.lineTo(e.x-17,e.y-12);ctx.lineTo(e.x+17,e.y-12);ctx.fill();ctx.fillStyle='#253e45';ctx.fillRect(e.x-19,e.y-25,38,5);ctx.fillStyle='#9af5ca';ctx.fillRect(e.x-19,e.y-25,38*e.hp/e.max,5)}
++ for(const b of snap.bullets){ctx.fillStyle=b.owner?'#b9ffe1':'#ff6e77';ctx.fillRect(b.x-3,b.y-6,6,12)}
++ snap.players.forEach((p,i)=>{ctx.fillStyle=p.id===id?'#9af5ca':'#9eb6ff';ctx.beginPath();ctx.moveTo(p.x,p.y-20);ctx.lineTo(p.x-16,p.y+17);ctx.lineTo(p.x+16,p.y+17);ctx.fill();ctx.font='13px monospace';ctx.textAlign='center';ctx.fillStyle='#fff';ctx.fillText(p.name+' · '+p.kills+' KOs',p.x,p.y-38);ctx.fillText('♥'.repeat(Math.max(0,p.hp)),p.x,p.y+35)})}
++ requestAnimationFrame(draw)}lobby();draw();
++})();
++</script></body></html>
+diff --git a/package-lock.json b/package-lock.json
+index 373b70e..08b5d1c 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -8,6 +8,9 @@
+       "name": "space-wars",
+       "version": "1.0.0",
+       "license": "ISC",
++      "dependencies": {
++        "ws": "^8.22.0"
++      },
+       "devDependencies": {
+         "@playwright/test": "^1.64.0",
+         "electron": "^45.0.0",
+@@ -3919,6 +3922,27 @@
+       "dev": true,
+       "license": "ISC"
+     },
++    "node_modules/ws": {
++      "version": "8.22.0",
++      "resolved": "https://registry.npmjs.org/ws/-/ws-8.22.0.tgz",
++      "integrity": "sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=10.0.0"
++      },
++      "peerDependencies": {
++        "bufferutil": "^4.0.1",
++        "utf-8-validate": ">=5.0.2"
++      },
++      "peerDependenciesMeta": {
++        "bufferutil": {
++          "optional": true
++        },
++        "utf-8-validate": {
++          "optional": true
++        }
++      }
++    },
+     "node_modules/xmlbuilder": {
+       "version": "15.1.1",
+       "resolved": "https://registry.npmjs.org/xmlbuilder/-/xmlbuilder-15.1.1.tgz",
+diff --git a/package.json b/package.json
+index 0ab0818..026ca77 100644
+--- a/package.json
++++ b/package.json
+@@ -6,6 +6,8 @@
+   "scripts": {
+     "test": "playwright test",
+     "dev": "http-server . -a 127.0.0.1 -p 8080 -c-1",
++    "multiplayer": "node server/index.cjs",
++    "test:multiplayer": "node --test server/test/multiplayer.test.cjs",
+     "build": "node scripts/build.cjs",
+     "check": "node scripts/check.cjs",
+     "desktop": "electron .",
+@@ -59,5 +61,8 @@
+       "oneClick": false,
+       "allowToChangeInstallationDirectory": true
+     }
++  },
++  "dependencies": {
++    "ws": "^8.22.0"
+   }
+ }
+diff --git a/scripts/check.cjs b/scripts/check.cjs
+index b296c5f..da04b39 100644
+--- a/scripts/check.cjs
++++ b/scripts/check.cjs
+@@ -1,8 +1,8 @@
+ const fs = require('node:fs');
+ const vm = require('node:vm');
+ const { execFileSync } = require('node:child_process');
+-for (const match of fs.readFileSync('index.html', 'utf8').matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)) new vm.Script(match[1]);
+-for (const dir of ['scripts', 'desktop', 'tests']) {
++for (const html of ['index.html', 'multiplayer.html']) for (const match of fs.readFileSync(html, 'utf8').matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)) new vm.Script(match[1]);
++for (const dir of ['scripts', 'desktop', 'tests', 'server']) {
+   for (const file of fs.readdirSync(dir).filter(f => /\.(c?js)$/.test(f))) execFileSync(process.execPath, ['--check', `${dir}/${file}`]);
+ }
+ for (const file of ['playwright.config.js', 'playwright.smoke.config.js']) execFileSync(process.execPath, ['--check', file]);
+diff --git a/server/index.cjs b/server/index.cjs
+new file mode 100644
+index 0000000..5c7ee83
+--- /dev/null
++++ b/server/index.cjs
+@@ -0,0 +1,149 @@
++const http = require('node:http');
++const fs = require('node:fs');
++const path = require('node:path');
++const crypto = require('node:crypto');
++const { WebSocketServer, WebSocket } = require('ws');
++
++const ROOT = path.resolve(__dirname, '..');
++const PORT = process.env.PORT === undefined ? 3000 : Number(process.env.PORT);
++const DATA = process.env.SCORES_FILE || path.join(__dirname, 'scores.json');
++const WIDTH = 960, HEIGHT = 600, TICK = 1 / 30, LIMIT = 180;
++const rooms = new Map();
++const types = { '.html': 'text/html; charset=utf-8', '.png': 'image/png', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
++
++function leaderboard() {
++  try { const data = JSON.parse(fs.readFileSync(DATA, 'utf8')); return Array.isArray(data) ? data.slice(0, 50) : []; }
++  catch { return []; }
++}
++function saveScore(room) {
++  if (room.saved || !room.started || room.players.length !== 2) return;
++  room.saved = true;
++  const entry = { mode: room.mode, players: room.players.map(p => ({ name: p.name, kills: p.kills })),
++    score: room.score, sector: room.sector, winner: room.mode === 'versus' ?
++      (room.players[0].kills === room.players[1].kills ? 'TIE' : room.players.reduce((a, b) => a.kills > b.kills ? a : b).name) : null,
++    date: new Date().toISOString() };
++  const rows = [entry, ...leaderboard()].sort((a, b) => b.score - a.score).slice(0, 50);
++  fs.mkdirSync(path.dirname(DATA), { recursive: true });
++  const tmp = DATA + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(rows, null, 2)); fs.renameSync(tmp, DATA);
++}
++function send(ws, obj) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
++function broadcast(room, obj) { for (const p of room.players) send(p.ws, obj); }
++function newRoom(mode) {
++  if (rooms.size >= 100) return null;
++  let code; do { code = crypto.randomBytes(3).toString('hex').toUpperCase(); } while (rooms.has(code));
++  const room = { code, mode, players: [], enemies: [], bullets: [], sector: 1, score: 0, time: 0,
++    spawn: 1, spawned: 0, quota: 16, seq: 0, started: false, ended: false, saved: false };
++  rooms.set(code, room); return room;
++}
++function join(ws, msg) {
++  if (ws.room) return send(ws, { type: 'error', message: 'Already in a room' });
++  const name = String(msg.name || '').trim().replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 20);
++  if (!name) return send(ws, { type: 'error', message: 'Enter a player name' });
++  let room;
++  if (msg.type === 'create' && ['coop', 'versus'].includes(msg.mode)) room = newRoom(msg.mode);
++  else if (msg.type === 'join' && typeof msg.code === 'string') room = rooms.get(msg.code.trim().toUpperCase());
++  if (!room || room.players.length >= 2 || room.ended) return send(ws, { type: 'error', message: 'Room unavailable or full' });
++  const player = { id: crypto.randomUUID(), name, ws, x: room.players.length ? 620 : 340, y: 520,
++    hp: 5, kills: 0, inv: 0, fire: 0, dash: 0, nova: 1,
++    input: { x: 0, y: 0 }, action: null };
++  room.players.push(player); ws.room = room; ws.player = player;
++  send(ws, { type: 'joined', code: room.code, id: player.id, mode: room.mode });
++  broadcast(room, { type: 'roster', players: room.players.map(p => p.name), ready: room.players.length === 2 });
++  if (room.players.length === 2) { room.started = true; broadcast(room, { type: 'start' }); }
++}
++function end(room, reason) {
++  if (room.ended) return;
++  room.ended = true;
++  try { saveScore(room); } catch (err) { console.error('Could not save score:', err); }
++  broadcast(room, { type: 'end', reason, score: room.score,
++    winner: room.mode === 'versus' ? (room.players[0].kills === room.players[1].kills ? 'Tie' : room.players.reduce((a, b) => a.kills > b.kills ? a : b).name) : null });
++  rooms.delete(room.code);
++}
++function hit(a, b, radius) { return Math.hypot(a.x - b.x, a.y - b.y) < radius; }
++function damagePlayer(room, p) {
++  p.hp--; p.inv = 1.4;
++  if (p.hp <= 0 && room.mode === 'versus') {
++    p.hp = 5; p.inv = 2.5; p.x = room.players.indexOf(p) ? 620 : 340; p.y = 520;
++  }
++}
++function simulate(room) {
++  if (!room.started || room.ended) return;
++  room.time += TICK; room.spawn -= TICK;
++  if (room.spawn <= 0 && room.spawned < room.quota && room.enemies.length < 18) {
++    room.enemies.push({ id: ++room.seq, x: 40 + Math.random() * 880, y: -20, hp: 2 + Math.floor(room.sector / 3),
++      max: 2 + Math.floor(room.sector / 3), speed: 65 + room.sector * 7, drift: Math.random() * 6, fire: 2 });
++    room.spawned++; room.spawn = Math.max(.4, 1.05 - room.sector * .04);
++  }
++  for (const p of room.players) {
++    p.inv = Math.max(0, p.inv - TICK); p.dash = Math.max(0, p.dash - TICK); p.fire -= TICK;
++    const { x, y } = p.input; p.x = Math.max(18, Math.min(WIDTH - 18, p.x + x * 300 * TICK));
++    p.y = Math.max(35, Math.min(HEIGHT - 18, p.y + y * 300 * TICK));
++    if (p.action === 'dash' && p.dash <= 0) { p.y = Math.max(35, p.y - 110); p.inv = .5; p.dash = 3; }
++    if (p.action === 'nova' && p.nova > 0) { p.nova--; room.bullets = room.bullets.filter(b => b.owner);
++      for (const e of room.enemies) if (hit(e, p, 180)) { e.hp -= 5; e.lastHit = p.id; } }
++    p.action = null;
++    if (p.hp > 0 && p.fire <= 0) { room.bullets.push({ x: p.x, y: p.y - 18, vx: 0, vy: -520, owner: p.id }); p.fire = .18; }
++  }
++  for (const e of room.enemies) {
++    e.y += e.speed * TICK; e.x += Math.sin(room.time * 2 + e.drift) * 30 * TICK; e.fire -= TICK;
++    if (e.fire <= 0 && e.y < 470) {
++      const living = room.players.filter(p => p.hp > 0);
++      if (living.length) { const p = living[Math.floor(Math.random() * living.length)], a = Math.atan2(p.y - e.y, p.x - e.x);
++        room.bullets.push({ x: e.x, y: e.y, vx: Math.cos(a) * 135, vy: Math.sin(a) * 135, owner: null }); }
++      e.fire = 2.2;
++    }
++    for (const p of room.players) if (p.hp > 0 && p.inv <= 0 && hit(p, e, 25)) damagePlayer(room, p);
++  }
++  for (const b of room.bullets) {
++    b.x += b.vx * TICK; b.y += b.vy * TICK;
++    if (b.owner) {
++      for (const e of room.enemies) if (e.hp > 0 && hit(b, e, 19)) { e.hp--; e.lastHit = b.owner; b.dead = true; break; }
++    } else for (const p of room.players) if (p.hp > 0 && p.inv <= 0 && hit(b, p, 17)) { damagePlayer(room, p); b.dead = true; break; }
++  }
++  for (const e of room.enemies) if (e.hp <= 0) { room.score += 100;
++    const killer = room.players.find(p => p.id === e.lastHit); if (killer) killer.kills++; }
++  if (room.mode === 'coop' && room.enemies.some(e => e.y > HEIGHT + 20)) return end(room, 'An enemy escaped');
++  room.enemies = room.enemies.filter(e => e.hp > 0 && e.y <= HEIGHT + 20);
++  room.bullets = room.bullets.filter(b => !b.dead && b.y > -30 && b.y < HEIGHT + 30 && b.x > -30 && b.x < WIDTH + 30).slice(-220);
++  if (room.mode === 'coop' && room.players.every(p => p.hp <= 0)) return end(room, 'Both ships were destroyed');
++  if (room.mode === 'versus' && room.time >= LIMIT) return end(room, 'Time is up');
++  if (room.spawned === room.quota && room.enemies.length === 0) {
++    room.sector++; room.spawned = 0; room.quota = Math.min(50, 14 + room.sector * 2);
++    for (const p of room.players) { p.nova = Math.min(3, p.nova + 1); p.hp = Math.min(5, p.hp + 1); }
++  }
++  broadcast(room, { type: 'state', mode: room.mode, time: room.time, remaining: Math.max(0, LIMIT - room.time),
++    sector: room.sector, score: room.score, players: room.players.map(({ id, name, x, y, hp, kills, nova, dash }) => ({ id, name, x, y, hp, kills, nova, dash })),
++    enemies: room.enemies.map(({ id, x, y, hp, max }) => ({ id, x, y, hp, max })), bullets: room.bullets });
++}
++
++const server = http.createServer((req, res) => {
++  if (req.url === '/api/leaderboard') { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
++    return res.end(JSON.stringify(leaderboard())); }
++  let pathname; try { pathname = decodeURIComponent((req.url || '/').split('?')[0]); }
++  catch { res.writeHead(400); return res.end('Bad request'); }
++  const allowed = pathname === '/' ? '/index.html' : pathname;
++  if (!['/index.html', '/multiplayer.html'].includes(allowed) && !/^\/png\/[\w .-]+\.png$/.test(allowed)) {
++    res.writeHead(404); return res.end('Not found');
++  }
++  const file = path.join(ROOT, allowed);
++  fs.readFile(file, (err, data) => { if (err) { res.writeHead(404); return res.end('Not found'); }
++    res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff' }); res.end(data); });
++});
++const wss = new WebSocketServer({ server, path: '/socket', maxPayload: 512 });
++wss.on('connection', ws => {
++  ws.on('message', raw => { let msg; try { msg = JSON.parse(raw); } catch { return; }
++    if (msg.type === 'create' || msg.type === 'join') return join(ws, msg);
++    const p = ws.player; if (!p || !ws.room || ws.room.ended) return;
++    if (msg.type === 'input') {
++      p.input = { x: Math.max(-1, Math.min(1, Number(msg.x) || 0)), y: Math.max(-1, Math.min(1, Number(msg.y) || 0)) };
++      if (['dash', 'nova'].includes(msg.action)) p.action = msg.action;
++    }
++  });
++  ws.on('close', () => { if (ws.room && !ws.room.ended) {
++    const room = ws.room; if (room.started) end(room, 'A player disconnected');
++    else { rooms.delete(room.code); broadcast(room, { type: 'end', reason: 'Player left the room' }); }
++  } });
++});
++const timer = setInterval(() => { for (const room of rooms.values()) simulate(room); }, 1000 / 30);
++server.listen(PORT, '0.0.0.0', () => console.log(`Neon Drift multiplayer listening on ${server.address().port}`));
++module.exports = { server, wss, timer, rooms, simulate };
+diff --git a/server/test/multiplayer.test.cjs b/server/test/multiplayer.test.cjs
+new file mode 100644
+index 0000000..b328cf0
+--- /dev/null
++++ b/server/test/multiplayer.test.cjs
+@@ -0,0 +1,100 @@
++const { test } = require('node:test');
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const os = require('node:os');
++const path = require('node:path');
++const WebSocket = require('ws');
++
++const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neondrift-'));
++process.env.PORT = '0';
++process.env.SCORES_FILE = path.join(dir, 'scores.json');
++const { server, wss, timer, rooms, simulate } = require('../index.cjs');
++
++function connect(port) {
++  return new Promise((resolve, reject) => {
++    const ws = new WebSocket(`ws://127.0.0.1:${port}/socket`);
++    ws.once('open', () => resolve(ws)); ws.once('error', reject);
++  });
++}
++function message(ws, type) {
++  return new Promise((resolve, reject) => {
++    const timeout = setTimeout(() => { ws.off('message', handler); reject(new Error(`No ${type} response`)); }, 3000);
++    function handler(data) { const parsed = JSON.parse(data); if (parsed.type !== type) return;
++      clearTimeout(timeout); ws.off('message', handler); resolve(parsed); }
++    ws.on('message', handler);
++  });
++}
++async function match(mode) {
++  const port = server.address().port;
++  const first = await connect(port), second = await connect(port);
++  const joined = message(first, 'joined');
++  first.send(JSON.stringify({ type: 'create', name: 'Ace', mode }));
++  const { code, id } = await joined;
++  const start = message(first, 'start'), secondJoined = message(second, 'joined');
++  second.send(JSON.stringify({ type: 'join', code, name: 'Wing' }));
++  await secondJoined; await start;
++  return { first, second, room: rooms.get(code), id };
++}
++
++test('two real sockets join a room; server attributes kills and records results', async () => {
++  const { first, second, room, id } = await match('versus');
++  assert.equal(room.players.length, 2);
++  room.spawned = room.quota;
++  room.enemies.push({ id: 900, x: 340, y: 410, hp: 1, max: 1, speed: 0, drift: 0, fire: 100 });
++  room.bullets.push({ x: 340, y: 410, vx: 0, vy: 0, owner: id });
++  simulate(room);
++  assert.equal(room.players[0].kills, 1);
++  assert.equal(room.players[1].kills, 0);
++  assert.equal(room.score, 100);
++  room.time = 180;
++  const ended = message(second, 'end'); simulate(room);
++  assert.equal((await ended).winner, 'Ace');
++  const saved = JSON.parse(fs.readFileSync(process.env.SCORES_FILE, 'utf8'));
++  assert.equal(saved[0].winner, 'Ace');
++  assert.equal(saved[0].players[0].kills, 1);
++  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/leaderboard`);
++  assert.equal((await response.json())[0].score, 100);
++  const page = await fetch(`http://127.0.0.1:${server.address().port}/multiplayer.html`);
++  assert.equal(page.status, 200);
++  assert.match(await page.text(), /CHOOSE YOUR FLIGHT/);
++  first.close(); second.close();
++});
++
++test('co-op records one shared score and rejects a third player', async () => {
++  const { first, second, room } = await match('coop');
++  const third = await connect(server.address().port);
++  const error = message(third, 'error');
++  third.send(JSON.stringify({ type: 'join', code: room.code, name: 'Third' }));
++  assert.match((await error).message, /full/);
++  room.score = 200;
++  const ended = message(first, 'end'); second.close();
++  assert.match((await ended).reason, /disconnected/);
++  const saved = JSON.parse(fs.readFileSync(process.env.SCORES_FILE, 'utf8'));
++  assert.ok(saved.some(row => row.mode === 'coop' && row.score === 200));
++  first.close(); third.close();
++});
++
++test('an escape ends co-op but the kill race continues until its timer', async () => {
++  const coop = await match('coop');
++  coop.room.spawned = coop.room.quota;
++  coop.room.enemies.push({ id: 901, x: 50, y: 630, hp: 1, max: 1, speed: 0, drift: 0, fire: 100 });
++  const lost = message(coop.first, 'end'); simulate(coop.room);
++  assert.match((await lost).reason, /escaped/);
++  coop.first.close(); coop.second.close();
++
++  const versus = await match('versus');
++  versus.room.spawned = versus.room.quota;
++  versus.room.enemies.push({ id: 902, x: 50, y: 630, hp: 1, max: 1, speed: 0, drift: 0, fire: 100 });
++  simulate(versus.room);
++  assert.equal(versus.room.ended, false);
++  assert.equal(versus.room.enemies.length, 0);
++  versus.first.close(); versus.second.close();
++});
++
++test.after(async () => {
++  clearInterval(timer);
++  for (const client of wss.clients) client.terminate();
++  await new Promise(resolve => wss.close(resolve));
++  await new Promise(resolve => server.close(resolve));
++  fs.rmSync(dir, { recursive: true, force: true });
++});
+diff --git a/tests/multiplayer.spec.js b/tests/multiplayer.spec.js
+new file mode 100644
+index 0000000..fa4a5ba
+--- /dev/null
++++ b/tests/multiplayer.spec.js
+@@ -0,0 +1,40 @@
++const { test, expect } = require('@playwright/test');
++const fs = require('node:fs');
++const os = require('node:os');
++const path = require('node:path');
++
++test('two browser pilots join a kill race and see the same arena', async ({ browser }) => {
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'neondrift-browser-'));
++  process.env.PORT = '0'; process.env.SCORES_FILE = path.join(dir, 'scores.json');
++  const { server, wss, timer } = require('../server/index.cjs');
++  const base = `http://127.0.0.1:${server.address().port}/multiplayer.html`;
++  const first = await browser.newPage(), second = await browser.newPage();
++  const errors = [];
++  first.on('pageerror', e => errors.push(e.message));
++  second.on('pageerror', e => errors.push(e.message));
++  try {
++    await first.goto(base);
++    await first.locator('#name').fill('Ace');
++    await first.locator('#mode').selectOption('versus');
++    await first.locator('#create').click();
++    await expect(first.locator('#panel')).toContainText('Waiting for pilot two');
++    const code = (await first.locator('#room').innerText()).split('·')[1].trim();
++    await second.goto(base);
++    await second.locator('#name').fill('Wing');
++    await second.locator('#code').fill(code);
++    await second.locator('#join').click();
++    await expect(first.locator('#overlay')).toBeHidden();
++    await expect(second.locator('#overlay')).toBeHidden();
++    await expect(first.locator('#status')).toContainText('KILL RACE');
++    await expect(second.locator('#status')).toContainText('KILL RACE');
++    await first.keyboard.press('Space');
++    await expect(first.locator('#score')).toContainText('TEAM SCORE');
++    expect(errors).toEqual([]);
++  } finally {
++    await first.close(); await second.close(); clearInterval(timer);
++    for (const client of wss.clients) client.terminate();
++    await new Promise(resolve => wss.close(resolve));
++    await new Promise(resolve => server.close(resolve));
++    fs.rmSync(dir, { recursive: true, force: true });
++  }
++});
